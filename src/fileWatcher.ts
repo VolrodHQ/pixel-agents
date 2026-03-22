@@ -2,10 +2,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-import { FILE_WATCHER_POLL_INTERVAL_MS, PROJECT_SCAN_INTERVAL_MS } from './constants.js';
+import {
+  FILE_WATCHER_POLL_INTERVAL_MS,
+  PROJECT_SCAN_INTERVAL_MS,
+  SUBAGENT_SCAN_INTERVAL_MS,
+} from './constants.js';
 import { cancelPermissionTimer, cancelWaitingTimer, clearAgentActivity } from './timerManager.js';
 import { processTranscriptLine } from './transcriptParser.js';
 import type { AgentState } from './types.js';
+import { createEmptyMetrics } from './types.js';
 
 export function startFileWatching(
   agentId: number,
@@ -86,9 +91,32 @@ export function readNewLines(
       }
     }
 
+    let hadContent = false;
     for (const line of lines) {
       if (!line.trim()) continue;
       processTranscriptLine(agentId, line, agents, waitingTimers, permissionTimers, webview);
+      hadContent = true;
+    }
+
+    // Emit metrics update after processing new lines
+    if (hadContent) {
+      const updatedAgent = agents.get(agentId);
+      if (updatedAgent) {
+        webview?.postMessage({
+          type: 'agentMetricsUpdate',
+          id: agentId,
+          metrics: {
+            totalTokens:
+              updatedAgent.metrics.totalInputTokens + updatedAgent.metrics.totalOutputTokens,
+            model: updatedAgent.metrics.model,
+            teamName: updatedAgent.metrics.teamName,
+            agentType: updatedAgent.metrics.agentType,
+            agentDescription: updatedAgent.metrics.agentDescription,
+            currentTask: updatedAgent.metrics.currentTask,
+            relationships: [...updatedAgent.metrics.relationships],
+          },
+        });
+      }
     }
   } catch (e) {
     console.log(`[Pixel Agents] Read error for agent ${agentId}: ${e}`);
@@ -245,6 +273,9 @@ function adoptTerminalForFile(
     isWaiting: false,
     permissionSent: false,
     hadToolsInTurn: false,
+    metrics: createEmptyMetrics(),
+    isFileSubagent: false,
+    parentSessionAgentId: null,
   };
 
   agents.set(id, agent);
@@ -320,4 +351,195 @@ export function reassignAgentToFile(
     webview,
   );
   readNewLines(agentId, agents, waitingTimers, permissionTimers, webview);
+}
+
+// ── Subagent directory scanning ──────────────────────────────────────────────
+
+/** Known subagent JSONL paths (across all sessions) to avoid duplicate creation */
+const knownSubagentFiles = new Set<string>();
+
+/** Timer refs for subagent directory polling per session directory */
+const subagentScanTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+/**
+ * Start watching a session's subagents/ directory for new agent JSONL files.
+ * Called once per session directory discovered.
+ */
+export function ensureSubagentScan(
+  sessionDir: string,
+  parentAgentId: number,
+  nextAgentIdRef: { current: number },
+  agents: Map<number, AgentState>,
+  fileWatchers: Map<number, fs.FSWatcher>,
+  pollingTimers: Map<number, ReturnType<typeof setInterval>>,
+  waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+  permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+  webview: vscode.Webview | undefined,
+  persistAgents: () => void,
+): void {
+  if (subagentScanTimers.has(sessionDir)) return;
+
+  // Seed known files so existing subagents are registered on extension load
+  scanSubagentDirectory(
+    sessionDir,
+    parentAgentId,
+    nextAgentIdRef,
+    agents,
+    fileWatchers,
+    pollingTimers,
+    waitingTimers,
+    permissionTimers,
+    webview,
+    persistAgents,
+  );
+
+  const timer = setInterval(() => {
+    // Only scan if parent agent still exists
+    if (!agents.has(parentAgentId)) {
+      clearInterval(timer);
+      subagentScanTimers.delete(sessionDir);
+      return;
+    }
+    scanSubagentDirectory(
+      sessionDir,
+      parentAgentId,
+      nextAgentIdRef,
+      agents,
+      fileWatchers,
+      pollingTimers,
+      waitingTimers,
+      permissionTimers,
+      webview,
+      persistAgents,
+    );
+  }, SUBAGENT_SCAN_INTERVAL_MS);
+
+  subagentScanTimers.set(sessionDir, timer);
+}
+
+function scanSubagentDirectory(
+  sessionDir: string,
+  parentAgentId: number,
+  nextAgentIdRef: { current: number },
+  agents: Map<number, AgentState>,
+  fileWatchers: Map<number, fs.FSWatcher>,
+  pollingTimers: Map<number, ReturnType<typeof setInterval>>,
+  waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+  permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+  webview: vscode.Webview | undefined,
+  persistAgents: () => void,
+): void {
+  const subagentDir = path.join(sessionDir, 'subagents');
+  let files: string[];
+  try {
+    files = fs
+      .readdirSync(subagentDir)
+      .filter((f) => f.startsWith('agent-') && f.endsWith('.jsonl'))
+      .map((f) => path.join(subagentDir, f));
+  } catch {
+    return; // directory doesn't exist yet
+  }
+
+  for (const jsonlPath of files) {
+    if (knownSubagentFiles.has(jsonlPath)) continue;
+    knownSubagentFiles.add(jsonlPath);
+
+    // Read meta.json for agentType and description
+    const metaPath = jsonlPath.replace('.jsonl', '.meta.json');
+    let agentType: string | null = null;
+    let agentDescription: string | null = null;
+    try {
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as Record<string, string>;
+        agentType = meta.agentType ?? null;
+        agentDescription = meta.description ?? null;
+      }
+    } catch {
+      /* meta may be missing or malformed */
+    }
+
+    createFileBasedSubagent(
+      jsonlPath,
+      parentAgentId,
+      agentType,
+      agentDescription,
+      nextAgentIdRef,
+      agents,
+      fileWatchers,
+      pollingTimers,
+      waitingTimers,
+      permissionTimers,
+      webview,
+      persistAgents,
+    );
+  }
+}
+
+function createFileBasedSubagent(
+  jsonlPath: string,
+  parentAgentId: number,
+  agentType: string | null,
+  agentDescription: string | null,
+  nextAgentIdRef: { current: number },
+  agents: Map<number, AgentState>,
+  fileWatchers: Map<number, fs.FSWatcher>,
+  pollingTimers: Map<number, ReturnType<typeof setInterval>>,
+  waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+  permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+  webview: vscode.Webview | undefined,
+  persistAgents: () => void,
+): void {
+  const parentAgent = agents.get(parentAgentId);
+  const id = nextAgentIdRef.current++;
+
+  const metrics = createEmptyMetrics();
+  metrics.agentType = agentType;
+  metrics.agentDescription = agentDescription;
+
+  const agent: AgentState = {
+    id,
+    terminalRef: parentAgent?.terminalRef ?? null,
+    projectDir: parentAgent?.projectDir ?? path.dirname(path.dirname(jsonlPath)),
+    jsonlFile: jsonlPath,
+    fileOffset: 0,
+    lineBuffer: '',
+    activeToolIds: new Set(),
+    activeToolStatuses: new Map(),
+    activeToolNames: new Map(),
+    activeSubagentToolIds: new Map(),
+    activeSubagentToolNames: new Map(),
+    isWaiting: false,
+    permissionSent: false,
+    hadToolsInTurn: false,
+    metrics,
+    isFileSubagent: true,
+    parentSessionAgentId: parentAgentId,
+  };
+
+  agents.set(id, agent);
+  persistAgents();
+
+  console.log(
+    `[Pixel Agents] File subagent ${id} (${agentType ?? 'unknown'}): ${path.basename(jsonlPath)}`,
+  );
+
+  webview?.postMessage({
+    type: 'fileSubagentCreated',
+    id,
+    parentAgentId,
+    agentType,
+    agentDescription,
+  });
+
+  startFileWatching(
+    id,
+    jsonlPath,
+    agents,
+    fileWatchers,
+    pollingTimers,
+    waitingTimers,
+    permissionTimers,
+    webview,
+  );
+  readNewLines(id, agents, waitingTimers, permissionTimers, webview);
 }

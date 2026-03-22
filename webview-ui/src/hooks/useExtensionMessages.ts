@@ -18,6 +18,16 @@ export interface SubagentCharacter {
   label: string;
 }
 
+export interface AgentMetricsData {
+  totalTokens: number;
+  model: string | null;
+  teamName: string | null;
+  agentType: string | null;
+  agentDescription: string | null;
+  currentTask: string | null;
+  relationships: string[];
+}
+
 export interface FurnitureAsset {
   id: string;
   name: string;
@@ -53,6 +63,7 @@ export interface ExtensionMessageState {
   agentStatuses: Record<number, string>;
   subagentTools: Record<number, Record<string, ToolActivity[]>>;
   subagentCharacters: SubagentCharacter[];
+  agentMetrics: Record<number, AgentMetricsData>;
   layoutReady: boolean;
   layoutWasReset: boolean;
   loadedAssets?: { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> };
@@ -81,6 +92,7 @@ export function useExtensionMessages(
     Record<number, Record<string, ToolActivity[]>>
   >({});
   const [subagentCharacters, setSubagentCharacters] = useState<SubagentCharacter[]>([]);
+  const [agentMetrics, setAgentMetrics] = useState<Record<number, AgentMetricsData>>({});
   const [layoutReady, setLayoutReady] = useState(false);
   const [layoutWasReset, setLayoutWasReset] = useState(false);
   const [loadedAssets, setLoadedAssets] = useState<
@@ -395,6 +407,28 @@ export function useExtensionMessages(
         } catch (err) {
           console.error(`❌ Webview: Error processing furnitureAssetsLoaded:`, err);
         }
+      } else if (msg.type === 'fileSubagentCreated') {
+        const id = msg.id as number;
+        const agentType = msg.agentType as string | null;
+        const agentDescription = msg.agentDescription as string | null;
+        setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]));
+        os.addAgent(id, undefined, undefined, undefined, undefined, agentType ?? undefined);
+        setAgentMetrics((prev) => ({
+          ...prev,
+          [id]: {
+            totalTokens: 0,
+            model: null,
+            teamName: null,
+            agentType,
+            agentDescription,
+            currentTask: null,
+            relationships: [],
+          },
+        }));
+      } else if (msg.type === 'agentMetricsUpdate') {
+        const id = msg.id as number;
+        const metrics = msg.metrics as AgentMetricsData;
+        setAgentMetrics((prev) => ({ ...prev, [id]: metrics }));
       }
     };
     window.addEventListener('message', handler);
@@ -409,6 +443,7 @@ export function useExtensionMessages(
     agentStatuses,
     subagentTools,
     subagentCharacters,
+    agentMetrics,
     layoutReady,
     layoutWasReset,
     loadedAssets,

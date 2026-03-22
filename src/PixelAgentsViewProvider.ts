@@ -96,12 +96,12 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         );
       } else if (message.type === 'focusAgent') {
         const agent = this.agents.get(message.id);
-        if (agent) {
+        if (agent?.terminalRef) {
           agent.terminalRef.show();
         }
       } else if (message.type === 'closeAgent') {
         const agent = this.agents.get(message.id);
-        if (agent) {
+        if (agent?.terminalRef) {
           agent.terminalRef.dispose();
         }
       } else if (message.type === 'saveAgentSeats') {

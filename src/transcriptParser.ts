@@ -70,6 +70,21 @@ export function processTranscriptLine(
   try {
     const record = JSON.parse(line);
 
+    // ── Accumulate metrics from every assistant record ──────────────────────
+    if (record.type === 'assistant') {
+      const usage = record.message?.usage as Record<string, number> | undefined;
+      if (usage) {
+        agent.metrics.totalInputTokens += usage.input_tokens || 0;
+        agent.metrics.totalOutputTokens += usage.output_tokens || 0;
+      }
+      if (record.message?.model && typeof record.message.model === 'string') {
+        agent.metrics.model = record.message.model;
+      }
+      if (record.teamName && typeof record.teamName === 'string') {
+        agent.metrics.teamName = record.teamName;
+      }
+    }
+
     if (record.type === 'assistant' && Array.isArray(record.message?.content)) {
       const blocks = record.message.content as Array<{
         type: string;
@@ -93,6 +108,17 @@ export function processTranscriptLine(
             agent.activeToolIds.add(block.id);
             agent.activeToolStatuses.set(block.id, status);
             agent.activeToolNames.set(block.id, toolName);
+            // ── Track relationships and current task ──────────────────────
+            if (toolName === 'SendMessage' && typeof block.input?.to === 'string') {
+              agent.metrics.relationships.add(block.input.to as string);
+            }
+            if (toolName === 'TaskUpdate') {
+              const inp = block.input || {};
+              agent.metrics.currentTask =
+                (typeof inp.description === 'string' ? inp.description : null) ||
+                (typeof inp.taskId !== 'undefined' ? `Task ${inp.taskId}` : null);
+              if (typeof inp.status === 'string') agent.metrics.taskStatus = inp.status;
+            }
             if (!PERMISSION_EXEMPT_TOOLS.has(toolName)) {
               hasNonExemptTool = true;
             }

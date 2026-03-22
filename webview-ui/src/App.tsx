@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { AgentLabels } from './components/AgentLabels.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { DebugView } from './components/DebugView.js';
+import { InfoCard } from './components/InfoCard.js';
 import { ZoomControls } from './components/ZoomControls.js';
 import { PULSE_ANIMATION_DURATION_SEC } from './constants.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
@@ -143,6 +145,7 @@ function App() {
     agentStatuses,
     subagentTools,
     subagentCharacters,
+    agentMetrics,
     layoutReady,
     layoutWasReset,
     loadedAssets,
@@ -191,6 +194,14 @@ function App() {
     const meta = os.subagentMeta.get(agentId);
     const focusId = meta ? meta.parentAgentId : agentId;
     vscode.postMessage({ type: 'focusAgent', id: focusId });
+  }, []);
+
+  const [infoCardAgentId, setInfoCardAgentId] = useState<number | null>(null);
+  const [infoCardPos, setInfoCardPos] = useState({ x: 0, y: 0 });
+
+  const handleLabelClick = useCallback((id: number, screenX: number, screenY: number) => {
+    setInfoCardAgentId((prev) => (prev === id ? null : id));
+    setInfoCardPos({ x: screenX, y: screenY });
   }, []);
 
   const officeState = getOfficeState();
@@ -356,6 +367,34 @@ function App() {
           panRef={editor.panRef}
           onCloseAgent={handleCloseAgent}
           alwaysShowOverlay={alwaysShowOverlay}
+        />
+      )}
+
+      {!isDebugMode && (
+        <AgentLabels
+          officeState={officeState}
+          agents={agents}
+          agentStatuses={agentStatuses}
+          containerRef={containerRef}
+          zoom={editor.zoom}
+          panRef={editor.panRef}
+          subagentCharacters={subagentCharacters}
+          agentMetrics={agentMetrics}
+          onAgentClick={handleLabelClick}
+        />
+      )}
+
+      {infoCardAgentId !== null && (
+        <InfoCard
+          agentId={infoCardAgentId}
+          metrics={agentMetrics[infoCardAgentId] ?? null}
+          isActive={officeState.characters.get(infoCardAgentId)?.isActive ?? false}
+          isWaiting={agentStatuses[infoCardAgentId] === 'waiting'}
+          screenX={infoCardPos.x}
+          screenY={infoCardPos.y}
+          containerWidth={containerRef.current?.getBoundingClientRect().width ?? 600}
+          containerHeight={containerRef.current?.getBoundingClientRect().height ?? 400}
+          onClose={() => setInfoCardAgentId(null)}
         />
       )}
 

@@ -9,10 +9,16 @@ import {
   WORKSPACE_KEY_AGENT_SEATS,
   WORKSPACE_KEY_AGENTS,
 } from './constants.js';
-import { ensureProjectScan, readNewLines, startFileWatching } from './fileWatcher.js';
+import {
+  ensureProjectScan,
+  ensureSubagentScan,
+  readNewLines,
+  startFileWatching,
+} from './fileWatcher.js';
 import { migrateAndLoadLayout } from './layoutPersistence.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
 import type { AgentState, PersistedAgent } from './types.js';
+import { createEmptyMetrics } from './types.js';
 
 export function getProjectDirPath(cwd?: string): string | null {
   const workspacePath = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -81,6 +87,9 @@ export async function launchNewTerminal(
     permissionSent: false,
     hadToolsInTurn: false,
     folderName,
+    metrics: createEmptyMetrics(),
+    isFileSubagent: false,
+    parentSessionAgentId: null,
   };
 
   agents.set(id, agent);
@@ -124,6 +133,20 @@ export async function launchNewTerminal(
           webview,
         );
         readNewLines(id, agents, waitingTimers, permissionTimers, webview);
+        // Start watching [sessionId]/subagents/ for file-based subagents
+        const sessionDir = agent.jsonlFile.replace(/\.jsonl$/, '');
+        ensureSubagentScan(
+          sessionDir,
+          id,
+          nextAgentIdRef,
+          agents,
+          fileWatchers,
+          pollingTimers,
+          waitingTimers,
+          permissionTimers,
+          webview,
+          persistAgents,
+        );
       }
     } catch {
       /* file may not exist yet */
@@ -181,12 +204,17 @@ export function persistAgents(
 ): void {
   const persisted: PersistedAgent[] = [];
   for (const agent of agents.values()) {
+    // File-based subagents are rediscovered on restart — don't persist them
+    if (agent.isFileSubagent) continue;
+    if (!agent.terminalRef) continue;
     persisted.push({
       id: agent.id,
       terminalName: agent.terminalRef.name,
       jsonlFile: agent.jsonlFile,
       projectDir: agent.projectDir,
       folderName: agent.folderName,
+      agentType: agent.metrics.agentType ?? undefined,
+      agentDescription: agent.metrics.agentDescription ?? undefined,
     });
   }
   context.workspaceState.update(WORKSPACE_KEY_AGENTS, persisted);
@@ -236,6 +264,9 @@ export function restoreAgents(
       permissionSent: false,
       hadToolsInTurn: false,
       folderName: p.folderName,
+      metrics: createEmptyMetrics(),
+      isFileSubagent: false,
+      parentSessionAgentId: null,
     };
 
     agents.set(p.id, agent);

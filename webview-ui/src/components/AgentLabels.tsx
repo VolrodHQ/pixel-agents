@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 
-import type { SubagentCharacter } from '../hooks/useExtensionMessages.js';
+import type { AgentMetricsData, SubagentCharacter } from '../hooks/useExtensionMessages.js';
 import type { OfficeState } from '../office/engine/officeState.js';
 import { CharacterState, TILE_SIZE } from '../office/types.js';
+
+function toTitleCase(slug: string): string {
+  return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 interface AgentLabelsProps {
   officeState: OfficeState;
@@ -12,6 +16,8 @@ interface AgentLabelsProps {
   zoom: number;
   panRef: React.RefObject<{ x: number; y: number }>;
   subagentCharacters: SubagentCharacter[];
+  agentMetrics: Record<number, AgentMetricsData>;
+  onAgentClick: (id: number, screenX: number, screenY: number) => void;
 }
 
 export function AgentLabels({
@@ -22,6 +28,8 @@ export function AgentLabels({
   zoom,
   panRef,
   subagentCharacters,
+  agentMetrics,
+  onAgentClick,
 }: AgentLabelsProps) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -79,7 +87,9 @@ export function AgentLabels({
           dotColor = 'var(--vscode-charts-blue, #3794ff)';
         }
 
-        const labelText = subLabelMap.get(id) || `Agent #${id}`;
+        const metrics = agentMetrics[id];
+        const rawLabel = metrics?.agentType || subLabelMap.get(id) || `Agent #${id}`;
+        const labelText = toTitleCase(rawLabel);
 
         return (
           <div
@@ -92,9 +102,11 @@ export function AgentLabels({
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              pointerEvents: 'none',
+              pointerEvents: 'auto',
+              cursor: 'pointer',
               zIndex: 40,
             }}
+            onClick={() => onAgentClick(id, screenX, screenY)}
           >
             {dotColor !== 'transparent' && (
               <span
