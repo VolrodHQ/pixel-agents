@@ -298,6 +298,19 @@ function adoptTerminalForFile(
     webview,
   );
   readNewLines(id, agents, waitingTimers, permissionTimers, webview);
+  // Start watching [sessionId]/subagents/ for file-based subagents
+  ensureSubagentScan(
+    jsonlFile.replace(/\.jsonl$/, ''),
+    id,
+    nextAgentIdRef,
+    agents,
+    fileWatchers,
+    pollingTimers,
+    waitingTimers,
+    permissionTimers,
+    webview,
+    persistAgents,
+  );
 }
 
 export function reassignAgentToFile(

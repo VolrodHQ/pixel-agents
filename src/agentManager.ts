@@ -298,6 +298,19 @@ export function restoreAgents(
           permissionTimers,
           webview,
         );
+        // Start watching [sessionId]/subagents/ for file-based subagents
+        ensureSubagentScan(
+          p.jsonlFile.replace(/\.jsonl$/, ''),
+          p.id,
+          nextAgentIdRef,
+          agents,
+          fileWatchers,
+          pollingTimers,
+          waitingTimers,
+          permissionTimers,
+          webview,
+          doPersist,
+        );
       } else {
         // Poll for the file to appear
         const pollTimer = setInterval(() => {
@@ -317,6 +330,19 @@ export function restoreAgents(
                 waitingTimers,
                 permissionTimers,
                 webview,
+              );
+              // Start watching [sessionId]/subagents/ for file-based subagents
+              ensureSubagentScan(
+                agent.jsonlFile.replace(/\.jsonl$/, ''),
+                p.id,
+                nextAgentIdRef,
+                agents,
+                fileWatchers,
+                pollingTimers,
+                waitingTimers,
+                permissionTimers,
+                webview,
+                doPersist,
               );
             }
           } catch {
