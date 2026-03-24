@@ -102,9 +102,16 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       } else if (message.type === 'closeAgent') {
         const agent = this.agents.get(message.id as number);
         if (agent) {
-          if (agent.isFileSubagent) {
-            // File subagents share the parent's terminal — disposing it would kill the whole
-            // session. Just remove from tracking and notify the webview.
+          // In Agent Teams in-process mode, teammates share the leader's terminal.
+          // Disposing a shared terminal would kill the entire session.
+          const isSharedTerminal =
+            agent.terminalRef != null &&
+            [...this.agents.values()].some(
+              (a) => a.id !== (message.id as number) && a.terminalRef === agent.terminalRef,
+            );
+
+          if (agent.isFileSubagent || isSharedTerminal) {
+            // Remove from tracking only — never dispose a shared terminal.
             removeAgent(
               message.id as number,
               this.agents,

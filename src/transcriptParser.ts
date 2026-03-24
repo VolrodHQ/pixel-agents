@@ -90,10 +90,6 @@ export function processTranscriptLine(
       }
       if (record.teamName && typeof record.teamName === 'string') {
         agent.metrics.teamName = record.teamName;
-        // Use teamName as agentType if not already set (identifies Agent team members)
-        if (!agent.metrics.agentType) {
-          agent.metrics.agentType = record.teamName;
-        }
       }
     }
 
@@ -204,6 +200,20 @@ export function processTranscriptLine(
         cancelWaitingTimer(agentId, waitingTimers);
         clearAgentActivity(agent, agentId, permissionTimers, webview);
         agent.hadToolsInTurn = false;
+      }
+    } else if (record.type === 'system' && record.subtype === 'init') {
+      // Claude Code writes agent identity in the init record for teammates and subagents.
+      // Try all known field names for agentType and name.
+      if (!agent.metrics.agentType) {
+        const rawType =
+          record.agentType ?? record.subagentType ?? record.agentName ?? record.name ?? null;
+        if (rawType && typeof rawType === 'string') {
+          agent.metrics.agentType = rawType;
+          webview?.postMessage({ type: 'agentMetrics', id: agentId, metrics: agent.metrics });
+        }
+      }
+      if (record.teamName && typeof record.teamName === 'string') {
+        agent.metrics.teamName = record.teamName;
       }
     } else if (record.type === 'system' && record.subtype === 'turn_duration') {
       cancelWaitingTimer(agentId, waitingTimers);

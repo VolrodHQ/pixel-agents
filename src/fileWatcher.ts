@@ -471,16 +471,17 @@ function scanSubagentDirectory(
       /* meta may be missing or malformed */
     }
 
-    // If there's already a waiting file subagent for this parent with the same agentType,
-    // reassign it to the new JSONL instead of creating a duplicate character.
+    // If there's already a file subagent for this parent with the same agentType
+    // (waiting OR active), reassign it to the new JSONL instead of creating a duplicate.
+    // This handles both: task restarts and Agent Teams in-process mode where the same
+    // logical teammate may appear in multiple directories.
     if (agentType) {
       let reassigned = false;
       for (const [existingId, existingAgent] of agents) {
         if (
           existingAgent.isFileSubagent &&
           existingAgent.parentSessionAgentId === parentAgentId &&
-          existingAgent.metrics.agentType === agentType &&
-          existingAgent.isWaiting
+          existingAgent.metrics.agentType === agentType
         ) {
           console.log(
             `[Pixel Agents] Reassigning file subagent ${existingId} (${agentType}) to new JSONL`,
