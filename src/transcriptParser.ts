@@ -39,11 +39,19 @@ export function formatToolStatus(toolName: string, input: Record<string, unknown
       return 'Fetching web content';
     case 'WebSearch':
       return 'Searching the web';
-    case 'Task':
-    case 'Agent': {
+    case 'Task': {
       const desc = typeof input.description === 'string' ? input.description : '';
       return desc
         ? `Subtask: ${desc.length > TASK_DESCRIPTION_DISPLAY_MAX_LENGTH ? desc.slice(0, TASK_DESCRIPTION_DISPLAY_MAX_LENGTH) + '\u2026' : desc}`
+        : 'Running subtask';
+    }
+    case 'Agent': {
+      // Prefer subagent_type (the agent's identity) over description (the task)
+      const subType = typeof input.subagent_type === 'string' ? input.subagent_type : '';
+      const desc = typeof input.description === 'string' ? input.description : '';
+      const label = subType || desc;
+      return label
+        ? `Subtask: ${label.length > TASK_DESCRIPTION_DISPLAY_MAX_LENGTH ? label.slice(0, TASK_DESCRIPTION_DISPLAY_MAX_LENGTH) + '\u2026' : label}`
         : 'Running subtask';
     }
     case 'AskUserQuestion':
@@ -82,6 +90,10 @@ export function processTranscriptLine(
       }
       if (record.teamName && typeof record.teamName === 'string') {
         agent.metrics.teamName = record.teamName;
+        // Use teamName as agentType if not already set (identifies Agent team members)
+        if (!agent.metrics.agentType) {
+          agent.metrics.agentType = record.teamName;
+        }
       }
     }
 

@@ -457,18 +457,73 @@ function scanSubagentDirectory(
     if (knownSubagentFiles.has(jsonlPath)) continue;
     knownSubagentFiles.add(jsonlPath);
 
-    // Read meta.json for agentType and description
+    // Read meta.json for agentType and description (Claude Code may use several field names)
     const metaPath = jsonlPath.replace('.jsonl', '.meta.json');
     let agentType: string | null = null;
     let agentDescription: string | null = null;
     try {
       if (fs.existsSync(metaPath)) {
         const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as Record<string, string>;
-        agentType = meta.agentType ?? null;
-        agentDescription = meta.description ?? null;
+        agentType = meta.agentType ?? meta.subagentType ?? meta.type ?? meta.name ?? null;
+        agentDescription = meta.description ?? meta.agentDescription ?? null;
       }
     } catch {
       /* meta may be missing or malformed */
+    }
+
+    // If there's already a waiting file subagent for this parent with the same agentType,
+    // reassign it to the new JSONL instead of creating a duplicate character.
+    if (agentType) {
+      let reassigned = false;
+      for (const [existingId, existingAgent] of agents) {
+        if (
+          existingAgent.isFileSubagent &&
+          existingAgent.parentSessionAgentId === parentAgentId &&
+          existingAgent.metrics.agentType === agentType &&
+          existingAgent.isWaiting
+        ) {
+          console.log(
+            `[Pixel Agents] Reassigning file subagent ${existingId} (${agentType}) to new JSONL`,
+          );
+          // Stop watching old file
+          fileWatchers.get(existingId)?.close();
+          fileWatchers.delete(existingId);
+          const pt = pollingTimers.get(existingId);
+          if (pt) clearInterval(pt);
+          pollingTimers.delete(existingId);
+          try {
+            fs.unwatchFile(existingAgent.jsonlFile);
+          } catch {
+            /* ignore */
+          }
+          cancelWaitingTimer(existingId, waitingTimers);
+          cancelPermissionTimer(existingId, permissionTimers);
+          // Swap to new file
+          existingAgent.jsonlFile = jsonlPath;
+          existingAgent.fileOffset = 0;
+          existingAgent.lineBuffer = '';
+          existingAgent.isWaiting = false;
+          existingAgent.activeToolIds.clear();
+          existingAgent.activeToolStatuses.clear();
+          existingAgent.activeToolNames.clear();
+          persistAgents();
+          webview?.postMessage({ type: 'agentStatus', id: existingId, status: 'active' });
+          startFileWatching(
+            existingId,
+            jsonlPath,
+            agents,
+            fileWatchers,
+            pollingTimers,
+            waitingTimers,
+            permissionTimers,
+            webview,
+          );
+          readNewLines(existingId, agents, waitingTimers, permissionTimers, webview);
+          reassigned = true;
+          break;
+        }
+      }
+      if (reassigned) continue;
     }
 
     createFileBasedSubagent(

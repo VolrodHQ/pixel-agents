@@ -100,9 +100,25 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           agent.terminalRef.show();
         }
       } else if (message.type === 'closeAgent') {
-        const agent = this.agents.get(message.id);
-        if (agent?.terminalRef) {
-          agent.terminalRef.dispose();
+        const agent = this.agents.get(message.id as number);
+        if (agent) {
+          if (agent.isFileSubagent) {
+            // File subagents share the parent's terminal — disposing it would kill the whole
+            // session. Just remove from tracking and notify the webview.
+            removeAgent(
+              message.id as number,
+              this.agents,
+              this.fileWatchers,
+              this.pollingTimers,
+              this.waitingTimers,
+              this.permissionTimers,
+              this.jsonlPollTimers,
+              this.persistAgents,
+            );
+            this.webview?.postMessage({ type: 'agentClosed', id: message.id });
+          } else if (agent.terminalRef) {
+            agent.terminalRef.dispose();
+          }
         }
       } else if (message.type === 'saveAgentSeats') {
         // Store seat assignments in a separate key (never touched by persistAgents)
